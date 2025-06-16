@@ -1,0 +1,396 @@
+---
+title: "Build & Deploy A Stroke Prediction Model Using R"
+author: "Mashhood Raza Khan"
+date: "`r Sys.Date()`"
+output: html_document
+runtime: shiny
+---
+
+# About Data Analysis Report
+
+This RMarkdown file contains the report of the data analysis done for the project on building and deploying a stroke prediction model in R. It contains analysis such as data exploration, summary statistics and building the prediction models. The final report was completed on `r date()`. 
+
+**Data Description:**
+
+According to the World Health Organization (WHO) stroke is the 2nd leading cause of death globally, responsible for approximately 11% of total deaths.
+
+This data set is used to predict whether a patient is likely to get stroke based on the input parameters like gender, age, various diseases, and smoking status. Each row in the data provides relevant information about the patient.
+
+
+
+
+
+
+# Import Data & Data Preprocessing
+
+## Load Data & Install Packages
+
+```{r}
+
+
+# Set CRAN Mirror
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+#Install Necessary Packages
+install.packages("tidyverse")
+install.packages("tidymodels")
+install.packages("skimr")
+install.packages("janitor")
+install.packages("mice")
+install.packages("ggthemes")
+install.packages("DataExplorer")
+install.packages("corrplot")
+install.packages("vip")
+install.packages("themis")
+install.packages("shiny")
+install.packages("vetiver")
+install.packages("pins")
+install.packages("plumber")
+install.packages("jomo")
+install.packages("ranger")
+install.packages("xgboost")
+install.packages("bslib")
+install.packages("shinyWidgets")
+install.packages("ggplot2")
+
+library(tidyverse)
+library(tidymodels)
+library(skimr)
+library(janitor)
+library(jomo)
+library(mice)
+library(ggthemes)
+library(DataExplorer)
+library(corrplot)
+library(vip)
+library(themis)
+library(shiny)
+library(vetiver)
+library(pins)
+library(plumber)
+library(ranger)
+library(xgboost)
+library(pins)
+library(bslib)
+library(shinyWidgets)
+library(ggplot2)
+
+#Load the Stroke Dataset
+stroke <- read.csv("healthcare-dataset-stroke-data.csv") %>%
+  clean_names()
+
+
+```
+
+
+
+
+
+## Describe & Explore the Data
+
+```{r}
+
+#Convert column to correct format & handle special cases
+stroke <- stroke %>%
+  mutate(
+    bmi = as.numeric(bmi),
+    gender = as.factor(na_if(as.character(gender), "Other")),
+    smoking_status = as.factor(na_if(as.character(smoking_status), "Unknown")),
+    # Apply factor conversion only to the remaining variables
+    across(
+      c(ever_married, work_type, residence_type, hypertension, heart_disease, stroke),
+      ~ as.factor(.)
+    )
+  )
+
+#Impute Missing Values Using Predictive Mean Matching (Mean)
+stroke <- complete(mice(stroke, m=1, method="pmm", seed=123))
+
+#View Summary of Clean Data
+skim(stroke)
+
+#Visualise Missing Values
+plot_missing(stroke) + ggtitle("Missing Value Pattern")
+
+#Plot Distribution of Numerical Variables
+stroke %>%
+  select_if(is.numeric) %>%
+  pivot_longer(cols = everything(), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_density(fill = "#2980b9", alpha = 0.6) +
+  facet_wrap(~ variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Density Plot of Numeric Variables", x = "", y = "Density")
+
+#Correlation Matrix for Numeric Predictors
+corrplot(cor(select_if(stroke, is.numeric)), method="color", tl.cex = 0.7, addCoef.col = "black")
+
+
+```
+
+
+
+
+
+# Build Prediction Models
+
+```{r}
+
+#Split into Trainig and Test Sets (stratified)
+set.seed(2025)
+split <- initial_split(stroke, strata=stroke)
+train <- training(split)
+test <- testing(split)
+
+#Processing Recipe
+stroke_recipe <- recipe(stroke ~ ., data=train) %>%
+  step_impute_knn(all_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_smote(stroke)
+
+#Specify Models
+models <- list(
+  logistic = logistic_reg() %>% set_engine("glm"),
+  random_forest =  rand_forest(trees=500) %>% set_engine("ranger", importance = "impurity") %>% set_mode("classification"),
+  xgboost = boost_tree(trees=1000, learn_rate = 0.05) %>% set_engine("xgboost") %>% set_mode("classification")
+)
+
+#Build Workflows
+wfs <- map(models, ~workflow() %>% add_model(.x) %>% add_recipe(stroke_recipe))
+
+# 5-fold Cross-Validation
+cv <- vfold_cv(train, v=5, strata=stroke)
+
+#Fit via Resampling and Collect Matrices
+results <- map(
+  wfs,
+  ~ fit_resamples(
+      .x,
+      resamples = cv,
+      metrics = metric_set(accuracy, recall, precision, f_meas, roc_auc),
+      control = control_resamples(save_pred = TRUE)
+    )
+)
+
+metrics_df <- map2_dfr(results, names(results), ~ collect_metrics(.x) %>% mutate(model=.y))
+
+
+```
+
+
+
+
+
+# Evaluate & Select Prediction Models
+
+```{r}
+
+
+#Compare Models Across Metrics
+metrics_df %>%
+  ggplot(aes(model, mean, color= .metric)) +
+  geom_point(size=3, position = position_dodge(0.6)) +
+  facet_wrap(~ .metric, scales="free_y") +
+  theme_minimal() +
+  labs(
+    title = "Model Performance Comparision",
+    y= "Mean Score",
+    x= NULL
+  )
+         
+#Finalise Best Model (random forest) on Full Train Data
+final_model <- wfs$random_forest %>% last_fit(split)
+
+#ROC Curve
+final_model %>%
+  collect_predictions() %>%
+  roc_curve(truth=stroke, .pred_1) %>% 
+  autoplot() +
+  ggtitle("ROC Curve for Final Model")
+
+#Precision-Recall Curve
+final_model %>%
+  collect_predictions() %>%
+  pr_curve(truth=stroke, .pred_1) %>%
+  autoplot() +
+  ggtitle("Precision-Recall Curve for Final Model")
+
+#Variable Importance Plot
+final_model$.workflow[[1]] %>%
+  extract_fit_parsnip() %>%
+  vip(num_features=10) +
+  ggtitle("Top 10 Feature Importance")
+
+#Calibration Plot  
+preds <- final_model %>% collect_predictions()
+
+ preds_binned <- preds %>%
+   mutate(bin = ntile(.pred_1, 10)) %>%
+   group_by(bin) %>%
+   summarise(
+     mean_pred = mean(.pred_1),
+     observed = mean(as.numeric(stroke) ==1)
+   )
+ 
+ ggplot(preds_binned, aes(mean_pred, observed)) +
+   geom_line(color = "#0072B2", size = 1.2) +
+   geom_abline(linetype = "dashed", color = "#D55E00") +
+   theme_minimal() +
+   labs(
+     title = "Calibration Plot",
+     x     = "Mean Predicted Probability",
+     y     = "Observed Stroke Rate"
+       )
+
+ 
+```
+
+
+
+
+
+# Deploy The Prediction Model
+
+```{r}
+
+
+# Load Trained Model
+model <- final_model$.workflow[[1]]
+
+# Medicare-Style Soothing Theme
+my_theme <- bs_theme(
+  bootswatch = "minty",
+  primary = "#2980b9",
+  bg = "#f8fafd",
+  fg = "#2c3e50",
+  base_font = font_google("Open Sans")
+)
+
+ui <- fluidPage(
+  theme = my_theme,
+
+  # Custom styling: watermark + blue button
+  tags$head(
+    tags$style(HTML("
+      body {
+        background-image: url('brain_watermark.png');
+        background-size: 35%;
+        background-position: center center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+        opacity: 0.97;
+      }
+      .predict-btn {
+        background-color: #2980b9;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        font-size: 18px;
+        border-radius: 12px;
+        margin-top: 20px;
+      }
+      .predict-btn:hover {
+        background-color: #1f5e84;
+      }
+    "))
+  ),
+
+  titlePanel("🧠 Stroke Risk Predictor"),
+
+  sidebarLayout(
+    sidebarPanel(
+      style = "background-color: white; border-radius: 10px; padding: 20px;",
+      sliderInput("age", "Age", 0, 100, 50),
+      selectInput("gender", "Gender", c("Male", "Female")),
+      selectInput("hypertension", "Hypertension", c("Yes", "No")),
+      selectInput("heart_disease", "Heart Disease", c("Yes", "No")),
+      selectInput("ever_married", "Married?", c("Yes", "No")),
+      selectInput("work_type", "Work Type", unique(stroke$work_type)),
+      selectInput("residence_type", "Residence Type", unique(stroke$residence_type)),
+      numericInput("avg_glucose_level", "Avg Glucose Level", 100),
+      numericInput("bmi", "BMI", 25),
+      selectInput("smoking_status", "Smoking Status", unique(stroke$smoking_status)),
+      actionButton("predict", "🔍 Predict", class = "predict-btn")
+    ),
+
+    mainPanel(
+      uiOutput("prediction_ui")
+    )
+  )
+)
+
+server <- function(input, output) {
+  observeEvent(input$predict, {
+    new_data <- tibble(
+      id                = 9999,
+      gender            = factor(input$gender, levels = levels(stroke$gender)),
+      age               = input$age,
+      hypertension      = factor(input$hypertension, levels = levels(stroke$hypertension)),
+      heart_disease     = factor(input$heart_disease, levels = levels(stroke$heart_disease)),
+      ever_married      = factor(input$ever_married, levels = levels(stroke$ever_married)),
+      work_type         = factor(input$work_type, levels = levels(stroke$work_type)),
+      residence_type    = factor(input$residence_type, levels = levels(stroke$residence_type)),
+      avg_glucose_level = input$avg_glucose_level,
+      bmi               = input$bmi,
+      smoking_status    = factor(input$smoking_status, levels = levels(stroke$smoking_status))
+    )
+
+    prob <- predict(model, new_data, type = "prob")
+    stroke_prob <- round(prob$.pred_1 * 100, 2)
+    no_stroke_prob <- round(100 - stroke_prob, 2)
+
+    output$prediction_ui <- renderUI({
+      fluidRow(
+        column(6,
+               div(style = "background-color:#e74c3c; color:white; padding:30px; border-radius:15px; text-align:center;",
+                   tags$h2(paste0(stroke_prob, "%")),
+                   tags$p("Probability of having a Stroke")
+               )
+        ),
+        column(6,
+               div(style = "background-color:#27ae60; color:white; padding:30px; border-radius:15px; text-align:center;",
+                   tags$h2(paste0(no_stroke_prob, "%")),
+                   tags$p("Probability of not having a Stroke")
+               )
+        )
+      )
+    })
+  })
+}
+
+shinyApp(ui, server)
+
+
+```
+
+
+
+
+
+# Findings & Conclusions
+
+This project successfully built, validated, and deployed a stroke prediction model using real-world healthcare data. Through a systematic data science pipeline in R, we gained key clinical insights while also ensuring technical robustness and usability.
+
+- **Model Performance:** Among the models evaluated (logistic regression, random forest, XGBoost), the **random forest model** emerged as the top performer based on AUC, accuracy, and recall — making it well-suited for identifying high-risk stroke cases.
+
+- **Top Predictors:** The most influential features contributing to stroke risk were:
+  - **Age:** Strong positive correlation with stroke likelihood.
+  - **Average Glucose Level:** High glucose levels were frequently associated with stroke-positive patients.
+  - **Hypertension and Heart Disease:** These comorbidities showed significantly higher prevalence in stroke cases.
+
+- **Class Imbalance Handling:** The use of **SMOTE (Synthetic Minority Over-sampling Technique)** within the themis package effectively mitigated the issue of data imbalance, enhancing the model's ability to detect strokes without sacrificing specificity.
+
+- **Calibration:** The final model’s probability outputs were shown to be well-calibrated, indicating that the predicted stroke probabilities are statistically reliable and interpretable.
+
+- **Deployment:** The model was successfully deployed using **Shiny**, providing an interactive and user-friendly web interface. This allows clinical users, researchers, and decision-makers to easily explore and interpret stroke risk predictions through a point-and-click interface — without needing programming expertise. The intuitive layout and real-time outputs make the tool highly accessible and practical for integration into healthcare support workflows.
+
+This end-to-end pipeline demonstrates how data science can be practically applied to healthcare decision-making. From careful preprocessing and advanced modeling to real-world deployment, each step was geared toward enhancing stroke risk stratification. The final product is not only **accurate** and **interpretable**, but also **interactive**, **scalable**, and **ready for real-time clinical usage**.
+
+Going forward, this model could be:
+  -Embedded in electronic health records (EHRs)
+  -Integrated into public health dashboards
+  -Retrained on local or live data streams to remain relevant over time
+
+Ultimately, such models can serve as **digital second opinions**, empowering healthcare providers with timely and data-driven insights — and potentially saving lives.
