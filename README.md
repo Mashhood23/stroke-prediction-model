@@ -105,6 +105,6 @@ Visit the live app:
 ### 📚 Author
 ### Mashhood Raza Khan
 ### 📧 mashhoodrazakhan23@gmail.com
-###📍 India
+### 📍 India
 
 ---
