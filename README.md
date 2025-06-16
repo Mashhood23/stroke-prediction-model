@@ -1,5 +1,7 @@
 # 🧠 Stroke Prediction Model in R (Interactive Web App & Report)
 
+# [Link Here and wait for 60s to Open Live App](https://mashhood23.shinyapps.io/Build-Deploy-Stroke-Prediction-Model-R/)  
+
 *"Data science in healthcare isn't just about prediction — it's about making insights useful, understandable, and actionable. This project brings that philosophy to life."*
 
 This project presents a complete, end-to-end solution for predicting stroke risk using real-world healthcare data. Developed entirely in **R** and powered by **Shiny**, it combines interactive user interfaces, advanced machine learning modeling, and visual communication — all integrated within a single, beautifully styled `RMarkdown` document.
