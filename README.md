@@ -1,6 +1,6 @@
 # 🧠 Stroke Prediction Model in R (Interactive Web App & Report)
 
-# [Link Here and wait for 60s to Open Live App](https://mashhood23.shinyapps.io/Build-Deploy-Stroke-Prediction-Model-R/)  
+# [Link Here and wait for 60s to Open Live App]([https://mashhood23.shinyapps.io/Build-Deploy-Stroke-Prediction-Model-R/](https://mashhood23.shinyapps.io/StrokePredictorApp/))  
 
 *"Data science in healthcare isn't just about prediction — it's about making insights useful, understandable, and actionable. This project brings that philosophy to life."*
 
